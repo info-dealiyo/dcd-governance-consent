@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://cdn.jsdelivr.net 'sha256-eNvm5rcWpoZQqVqkEU+Oagh/YXZlbpPbXUcBA/t9OkQ='; style-src 'sha256-SHlhFb+b2PhsTSbLt+nJ07Km6pSKgeBpv6kGLjZT4D4='; connect-src https://xyjusokjqhyrmqqwjijc.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'">
+<title>Dealiyo Governance Auditor — authorize</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 32px 16px; }
+  main { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  .box { border: 2px solid currentColor; border-radius: 8px; padding: 16px; margin: 16px 0; }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; }
+  button { font: inherit; padding: 10px 16px; margin: 12px 8px 0 0; border-radius: 6px; border: 2px solid currentColor; cursor: pointer; }
+  button.primary { font-weight: 700; }
+  button:focus-visible, input:focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  #status { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dealiyo Governance Auditor</h1>
+  <p>This page authorizes <strong>one</strong> OAuth client to read pending governance audit packages and submit
+  one structured ruling per request in the <strong>Governance mailbox only</strong>
+  (<code>dcd-governance-mailbox</code>). It grants no access to Dealiyo application data, deployments,
+  repositories, terminals or engine commands.</p>
+
+  <section id="signin" class="box" hidden>
+    <p>Sign in as the approved Governance Auditor principal.</p>
+    <form id="signinForm">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </section>
+
+  <section id="consent" class="box" hidden>
+    <p>Requesting client: <strong id="clientName"></strong></p>
+    <p>Returns to: <code id="redirect"></code></p>
+    <p>Scopes: <code id="scopes"></code></p>
+    <button class="primary" id="approve" type="button">Approve (mailbox only)</button>
+    <button id="deny" type="button">Deny</button>
+  </section>
+
+  <p id="status" role="status" aria-live="polite">Loading…</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"
+        integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
+<script>
+(function () {
+  "use strict";
+  var SUPABASE_URL = "https://xyjusokjqhyrmqqwjijc.supabase.co";
+  var PUBLISHABLE_KEY = "sb_publishable_4ht8O2Tytqbe96ENb2xz5w_pL_fsM2X";
+  var EXPECTED_REDIRECT = "https://chatgpt.com/connector/oauth/MCxcXPq8gT7K";
+  var EXPECTED_CLIENT_NAME = "Dealiyo Governance Auditor";
+  var status = document.getElementById("status");
+  function say(t) { status.textContent = t; }
+  var id = new URLSearchParams(location.search).get("authorization_id");
+  if (!id || !/^[A-Za-z0-9-]{8,100}$/.test(id)) { say("Missing or invalid authorization request."); return; }
+  var sb = window.supabase.createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { persistSession: true } });
+
+  async function showConsent() {
+    var res = await sb.auth.oauth.getAuthorizationDetails(id);
+    if (res.error) { say("Cannot load this authorization request: " + res.error.message); return; }
+    var d = res.data || {};
+    if (d.redirect_url && !d.client) {                                   // consent already given
+      if (String(d.redirect_url).indexOf(EXPECTED_REDIRECT) !== 0) { say("Refused: unexpected redirect target."); return; }
+      location.replace(d.redirect_url); return;
+    }
+    var client = d.client || {};
+    if (client.name !== EXPECTED_CLIENT_NAME) { say("Refused: this is not the Governance Auditor client."); return; }
+    var redirect = d.redirect_uri || "";
+    document.getElementById("clientName").textContent = (client.name || "(unnamed client)") + " (" + client.id + ")";
+    document.getElementById("redirect").textContent = redirect;
+    document.getElementById("scopes").textContent = d.scope || "";
+    if (redirect !== EXPECTED_REDIRECT) {
+      say("Refused: this request does not return to the registered ChatGPT connector callback.");
+      return;
+    }
+    document.getElementById("consent").hidden = false;
+    say("Review and approve or deny.");
+  }
+
+  async function decide(approve) {
+    document.getElementById("approve").disabled = true;
+    document.getElementById("deny").disabled = true;
+    var opts = { skipBrowserRedirect: true };   // the redirect target is checked below before leaving
+    var res = approve ? await sb.auth.oauth.approveAuthorization(id, opts) : await sb.auth.oauth.denyAuthorization(id, opts);
+    if (res.error) { say("Failed: " + res.error.message); return; }
+    var url = (res.data && res.data.redirect_url) || "";
+    if (url.indexOf(EXPECTED_REDIRECT) !== 0) { say("Refused: unexpected redirect target."); return; }
+    say(approve ? "Approved. Returning to ChatGPT…" : "Denied. Returning to ChatGPT…");
+    location.replace(url);
+  }
+
+  document.getElementById("approve").addEventListener("click", function () { decide(true); });
+  document.getElementById("deny").addEventListener("click", function () { decide(false); });
+  document.getElementById("signinForm").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    say("Signing in…");
+    var r = await sb.auth.signInWithPassword({ email: document.getElementById("email").value,
+                                              password: document.getElementById("password").value });
+    if (r.error) { say("Sign-in failed: " + r.error.message); return; }
+    document.getElementById("signin").hidden = true;
+    showConsent();
+  });
+
+  sb.auth.getSession().then(function (r) {
+    if (r.data && r.data.session) { showConsent(); }
+    else { document.getElementById("signin").hidden = false; say("Sign in to continue."); }
+  });
+})();
+</script>
+</body>
+</html>
